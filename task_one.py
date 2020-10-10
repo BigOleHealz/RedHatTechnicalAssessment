@@ -1,8 +1,13 @@
 import requests
 import pymysql
+import json
 from dataclasses import dataclass
 from random import sample
 from uuid import uuid4
+
+film_tablename = "film"
+character_tablename = "person"
+relationship_tablename = "relationship"
 
 def main():
 
@@ -12,15 +17,8 @@ def main():
     port = 3308
     db = "starwars_db"
 
-    # Create db name starwars_db if it does not already exist
-    conn = pymysql.connect(host=host, user=user, password=password, port=port)
-    try:
-        with conn.cursor() as cur:
-            cur.execute(f'CREATE DATABASE IF NOT EXISTS {db} CHARACTER SET utf8')
-    finally:
-        conn.close()
-
     handler = DBConn(host, user, password, port, db)
+    handler.create_db()
     api = StarWarsAPI()
     rand = RandGen() 
 
@@ -34,6 +32,7 @@ def main():
                 id = character_id,
                 name = character_response.json()["name"]
             )
+            chars_added.append(new_char)
             new_char.save(handler)
         else:
             continue
@@ -42,7 +41,7 @@ def main():
             film_response = api.get(film)
 
             if film_response.status_code == 200:
-                film_id = film[:-1].split("/")[-1]
+                film_id = film[:-1].split("/")[-1]  # Extract ID from URL
 
                 new_film = Film(
                     id = film_id,
@@ -61,6 +60,23 @@ def main():
 
             new_relationship.save(handler)
 
+
+    with handler.get_connection().cursor() as cur:
+        cur.execute(f'''select
+                            f.title,
+                            GROUP_CONCAT(c.name)
+                        from {relationship_tablename} r
+                        left join {film_tablename} f
+                            on r.film_id = f.id
+                        left join {character_tablename} c
+                            on r.character_id = c.id
+                        group by r.film_id
+                    ''')
+
+    data = cur.fetchall()
+    return [{'film' : rec[0], 'character' : rec[1].split(',')} for rec in data]
+
+
 class RandGen:
 
     def __init__(self, min_num=0, max_num=100):
@@ -76,7 +92,6 @@ class RandGen:
         else:
             return new_num
 
-# Too lazy for ABC
 class StarWarsAPI:
 
     def __init__(self):
@@ -103,8 +118,20 @@ class DBConn:
         self.port = port
         self.db = db
 
-    def get_connection(self):
+    def create_db(self):
+        connection = pymysql.connect(
+                host = self.host,
+                user = self.user,
+                password = self.password,
+                port = self.port
+            )
+        try:
+            with connection.cursor() as cur:
+                cur.execute(f'CREATE DATABASE IF NOT EXISTS {self.db} CHARACTER SET utf8')
+        finally:
+            connection.close()
 
+    def get_connection(self):
         connection = pymysql.connect(
                 host = self.host,
                 user = self.user,
@@ -127,8 +154,10 @@ class DBConn:
                     return True
                 elif response == 0:
                     fields = [f"{field_name} {field_type}" for field_name, field_type in schema.items()]
-                    sql = f"CREATE TABLE {tablename}(" + ", ".join(fields) + ", PRIMARY KEY (id))"
-                    cursor.execute(sql)
+                    sql = f"DROP TABLE IF EXISTS {tablename};CREATE TABLE {tablename}(" + ", ".join(fields) + ", PRIMARY KEY (id))"
+                    for statement in sql.split(';'):
+                        cursor.execute(statement)
+                        connection.commit()
                 else:
                     raise IndexError("non 0 or 1 value returned to table name")
         finally:
@@ -143,7 +172,7 @@ class Character:
 
     @property
     def tablename(self):
-        return "person"
+        return character_tablename
 
     def save(self, dbhandler):
         dbhandler.make_or_pass(self.tablename, self.__annotations__)
@@ -165,7 +194,7 @@ class Film:
 
     @property
     def tablename(self):
-        return "film"
+        return film_tablename
 
     def save(self, dbhandler):
         dbhandler.make_or_pass(self.tablename, self.__annotations__)
@@ -188,7 +217,7 @@ class Relationship:
 
     @property
     def tablename(self):
-        return "relationship"
+        return relationship_tablename
 
     def save(self, dbhandler):
         dbhandler.make_or_pass(self.tablename, self.__annotations__)
@@ -203,4 +232,5 @@ class Relationship:
             connection.close()
 
 if __name__ == "__main__":
-    main()
+    data = main()
+    print(json.dumps(data, indent=4, ensure_ascii=False))
