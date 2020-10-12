@@ -1,3 +1,20 @@
+'''
+Created Oct 12, 2020
+
+@author: Matt Healy
+
+Purpose: From a list of 15 randomly chosen integers between 1-87 [inclusive],
+        return a list of dicts (semi-structured data) of the following format:
+        {
+            "film": "<Film Title>",
+            "character":
+            [
+                "<Name of Character 1>",
+                "<Name of Character 2>",
+                "<Name of Character 3>",
+            ]
+        } 
+'''
 import requests
 import pymysql
 import json
@@ -5,6 +22,10 @@ from dataclasses import dataclass
 from random import sample
 from uuid import uuid4
 
+'''
+These table names would be environment variables but I chose to specify them in
+this script for simplicity and so that everything is in one place
+'''
 film_tablename = "film"
 character_tablename = "person"
 relationship_tablename = "relationship"
@@ -23,7 +44,7 @@ def main():
     rand = RandGen() 
 
     chars_added = []
-    while len(chars_added) < 15:
+    while len(chars_added) < 15: # specs ask for 15 random characters
         character_id = rand.new()
         character_response = api.get_character(character_id)
 
@@ -62,6 +83,7 @@ def main():
 
 
     with handler.get_connection().cursor() as cur:
+        # Group relationship table by film id to get list of characters
         cur.execute(f'''select
                             f.title,
                             GROUP_CONCAT(c.name)
@@ -79,12 +101,18 @@ def main():
 
 class RandGen:
 
-    def __init__(self, min_num=0, max_num=100):
+    def __init__(self, min_num=1, max_num=87):
+        '''
+        Shuffled list of ints between min_num and max_num
+        :param min_num (int): lowest number in list (should always be 1) for this use-case
+        :param max_num (int): highest number in list (should always be 87) for this use-case
+        '''
         self.min = min_num
         self.max = max_num
         self.bin = sample(range(self.min, self.max), self.max-self.min)
 
     def new(self):
+        # Pop first element from list or return an error if list  is empty
         try:
             new_num = self.bin.pop()
         except IndexError:
@@ -97,15 +125,15 @@ class StarWarsAPI:
     def __init__(self):
         self.basepath = "https://swapi.dev/api/"
 
-    def get_character(self, id):
+    def get_character(self, id: int):
         url = self.basepath + f"people/{id}"
         return requests.get(url)
 
-    def get_film(self, id):
+    def get_film(self, id: int):
         url = self.basepath + f"films/{id}"
         return requests.get(url)
 
-    def get(self, url):
+    def get(self, url: str):
         return requests.get(url)
 
 
@@ -127,7 +155,8 @@ class DBConn:
             )
         try:
             with connection.cursor() as cur:
-                cur.execute(f'CREATE DATABASE IF NOT EXISTS {self.db} CHARACTER SET utf8')
+                cur.execute(f'DROP DATABASE IF EXISTS {self.db}')
+                cur.execute(f'CREATE DATABASE {self.db} CHARACTER SET utf8')
         finally:
             connection.close()
 
@@ -141,7 +170,12 @@ class DBConn:
             )
         return connection
 
-    def make_or_pass(self, tablename, schema):
+    def make_or_pass(self, tablename: str, schema: dict):
+        '''
+        Create table if it doesn't already exist
+        :param tablename: Name of table
+        :param schema: dict of format {<column_name> : <data_type>}
+        '''
         sql = f"select count(*) from information_schema.tables where table_name = '{tablename}'"
         connection = self.get_connection()
 
@@ -154,7 +188,7 @@ class DBConn:
                     return True
                 elif response == 0:
                     fields = [f"{field_name} {field_type}" for field_name, field_type in schema.items()]
-                    sql = f"DROP TABLE IF EXISTS {tablename};CREATE TABLE {tablename}(" + ", ".join(fields) + ", PRIMARY KEY (id))"
+                    sql = f"CREATE TABLE {tablename}(" + ", ".join(fields) + ", PRIMARY KEY (id))"
                     for statement in sql.split(';'):
                         cursor.execute(statement)
                         connection.commit()
@@ -210,7 +244,7 @@ class Film:
 
 @dataclass
 class Relationship:
-
+    # Table that stores data needed to join Film table to Character table
     id: "VARCHAR(255)"
     character_id: "int"
     film_id: "int"
